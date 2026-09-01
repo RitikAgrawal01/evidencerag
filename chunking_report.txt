@@ -1,0 +1,30 @@
+=== conformal_prediction.pdf ===
+  fixed_size: 163 chunks, avg 996 chars, min 399, max 1000
+  recursive: 153 chunks, avg 955 chars, min 647, max 1000
+  section_aware: 128 chunks, avg 1141 chars, min 223, max 1240
+
+=== depth_anything_3.pdf ===
+  fixed_size: 108 chunks, avg 1000 chars, min 998, max 1000
+  recursive: 102 chunks, avg 953 chars, min 518, max 1000
+  section_aware: 91 chunks, avg 1068 chars, min 114, max 1200
+
+=== murali_latent_graph.pdf ===
+  fixed_size: 70 chunks, avg 995 chars, min 701, max 1000
+  recursive: 65 chunks, avg 965 chars, min 893, max 1000
+  section_aware: 55 chunks, avg 1141 chars, min 445, max 1200
+
+=== sages_cvs_challenge.pdf ===
+  fixed_size: 133 chunks, avg 997 chars, min 639, max 1000
+  recursive: 124 chunks, avg 962 chars, min 444, max 1000
+  section_aware: 120 chunks, avg 993 chars, min 137, max 1199
+
+=== sam3.pdf ===
+  fixed_size: 307 chunks, avg 998 chars, min 487, max 1000
+  recursive: 289 chunks, avg 954 chars, min 235, max 1000
+  section_aware: 242 chunks, avg 1139 chars, min 87, max 1207
+
+=== surgicalsam.pdf ===
+  fixed_size: 70 chunks, avg 989 chars, min 263, max 1000
+  recursive: 64 chunks, avg 973 chars, min 632, max 1000
+  section_aware: 61 chunks, avg 1022 chars, min 133, max 1232
+

@@ -1,0 +1,13 @@
+pymupdf>=1.24
+sentence-transformers>=3.3
+chromadb>=0.5.20
+rank-bm25>=0.2.2
+openai>=1.59
+ragas==0.4.3
+langchain-community==0.3.31   # pin required — see below
+datasets>=4.0
+pandas
+numpy
+python-dotenv
+tqdm
+tabulate

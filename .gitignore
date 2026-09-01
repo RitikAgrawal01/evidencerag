@@ -1,0 +1,10 @@
+.env
+.venv/
+
+data/papers/*.pdf
+data/processed/
+
+__pycache__/
+*.pyc
+
+.ipynb_checkpoints/

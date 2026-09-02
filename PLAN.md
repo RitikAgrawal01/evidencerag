@@ -135,9 +135,9 @@ Target layout (NEW = to create):
     src/extract.py                 FIX per-page layout detection
     src/chunking.py                FIX chunk_id, section field, real overlap
     src/build_corpus.py      NEW   extract + chunk all 3 strategies, persist
-    src/embed.py             NEW   MiniLM / BGE wrapper, batch encode
-    src/store.py             NEW   Chroma collection per (strategy, model)
-    src/retrievers.py        NEW   Dense, BM25, HybridRRF — one interface
+    src/embed.py             DONE  MiniLM / BGE wrapper, batch encode, per-chunk token stats
+    src/store.py             DONE  Chroma collection per (strategy, model)
+    src/retrievers.py        DONE  Dense, BM25, HybridRRF — one interface
     src/rerank.py            NEW   cross-encoder second stage
     src/generate.py          NEW   Generator interface + OpenAI + abstention
     src/pipeline.py          NEW   config -> end-to-end answer
@@ -234,21 +234,112 @@ rate between your labels and the judge is a number worth reporting.
    boundary-preserving without overlap. Both defensible; claiming overlap you don't
    have is not.
 
-5. **Persist the corpus** — `build_corpus.py` writes `data/processed/chunks_{strategy}.jsonl`
-   + `manifest.json` (code version, params, counts). Nothing re-parses a PDF after this.
+5. **DONE — Persist the corpus** — `build_corpus.py` writes
+   `data/processed/chunks_{strategy}.jsonl` + `manifest.json` (code_version hash of
+   extract.py+chunking.py, git commit, params, counts, per-paper breakdown). 2,492 chunks
+   total (851 fixed_size + 798 recursive + 843 section_aware) -- matches Ritik's
+   independent `check_tokenization.py` count exactly. 0 chunk_id collisions globally.
+   Nothing re-parses a PDF from here on. See DECISIONS.md.
 
-GATE: SAM 3 page 5 reads top-to-bottom in the audit file. Three JSONLs exist, every
-record has a unique chunk_id, section-aware records carry non-null `section` for >=80%.
+6. **(Added after 1.4, prompted by "why chunk_size=1000?") Equalize size caps across
+   strategies** — `section_aware_chunks` defaulted to `max_chunk_size=1200` while
+   `fixed_size`/`recursive` used `chunk_size=1000`; a pre-existing mismatch that would
+   have confounded Day 4 Stage A's strategy comparison (a size advantage looking like a
+   boundary-logic advantage). Lowered to 1000 to match. See DECISIONS.md for the fuller
+   writeup, and Day 4 Stage F for the follow-up: is 1000 actually a good number, checked
+   properly rather than assumed.
+
+GATE -- PASSED: SAM 3 page 5 reads top-to-bottom in the audit file. Three JSONLs exist
+(851/798/843 chunks), every one of 2,492 chunk_ids is globally unique, section_aware
+records carry non-null `section` for 100% (>= the 80% target), average chunk size sits
+at 989-1051 chars across all three strategies (fixed_size 996.7, recursive 1050.8,
+section_aware 989.2).
 
 ---
 
 ## DAY 2 — Index and retrieve
 
-Six Chroma collections: 3 chunkings x 2 embedding models, named `{strategy}__{model_slug}`.
-Store chunk_id, paper, section, start_page, end_page in metadata. This is the concrete
-payoff over FAISS — metadata rides with the vector, so a result knows how to cite itself.
+**1. `embed.py` — written, self-tested, and run for real. DONE.** One `Embedder` class
+per model_id (`MODELS = {"minilm": ..., "bge": ...}`), reading `max_seq_length` from the
+model object itself (never hardcoded), exposing `encode_passages`, `encode_queries`, and
+`token_stats` (true token count + truncated flag per text, against that model's own real
+limit). Also centralises BGE's query-only instruction prefix (`"Represent this sentence
+for searching relevant passages: "`, applied in `encode_queries` only, never
+`encode_passages`) — BGE was trained asymmetrically for this, MiniLM wasn't; see
+DECISIONS.md.
 
-One interface, three implementations:
+Real run against all 2,492 chunks (`python src/embed.py`), on Ritik's machine:
+
+    minilm (max_seq_length=256): median 265 tokens, truncated at 256: 1373/2492 (55.10%)
+    bge    (max_seq_length=512): median 265 tokens, truncated at 512:    28/2492 ( 1.12%)
+
+**Tokenization gate CLOSED.** MiniLM truncates the tail of 55.10% of chunks at its real
+256-token limit; BGE truncates only 1.12% at its 512-token limit, on the identical chunk
+set. `chunk_size` stays 1000 (see rationale above — shrinking it to fit MiniLM would
+erase the effect worth measuring). `token_stats()` output gets written into Chroma
+metadata in `store.py` below, so Day 4 can report exactly what fraction of MiniLM's
+retrieval misses land on truncated chunks.
+
+**2. `store.py` — written, integration-tested, and run for real. DONE.** Builds the
+six Chroma collections: 3 chunkings x 2 embedding models, named `{strategy}__{model_slug}`.
+Stores `chunk_id`, `paper`, `section`, `start_page`, `end_page` in metadata — the concrete
+payoff over FAISS, metadata rides with the vector, so a result knows how to cite itself.
+Also stores `token_count` and `truncated` per (chunk, model) pair from `embed.py`'s
+`token_stats()` — tokenized with that model's OWN tokenizer, compared against that
+model's OWN real `max_seq_length` (see the closed tokenization gate below). Turns
+"MiniLM probably truncates some chunks" into a per-chunk, per-model fact Day 4 can cite
+directly: what fraction of Recall@K misses were on chunks flagged truncated.
+
+Reuses one `Embedder` per model across all three strategies rather than rebuilding it
+three times, and rebuilds each collection from scratch on every run (delete-then-recreate)
+— same "deterministic regeneration over incremental drift" philosophy as `build_corpus.py`.
+Batches `.add()` calls at `client.get_max_batch_size()`, read at runtime rather than
+guessed — in practice a single batch covers this whole corpus, but the loop doesn't
+assume that stays true.
+
+Two concrete things found while writing this, checked directly against
+chromadb==1.5.9 (the exact version pinned in `requirements.lock.txt`), not assumed from
+docs:
+- Chroma's metadata store rejects an explicit `None` value outright
+  (`TypeError: Cannot convert Python object to MetadataValue`). `section` is `None` for
+  fixed_size/recursive chunks by design — it has to be OMITTED from the metadata dict
+  entirely for those, never passed through as `None`. `store.py`'s `_clean_metadata`
+  does this.
+- `get_or_create_collection`'s default `embedding_function` is Chroma's own
+  `DefaultEmbeddingFunction` — harmless here since every `.add()` call always supplies
+  its own `embeddings=`, but passed explicitly as `embedding_function=None` anyway, so
+  nothing could ever silently fall back to Chroma computing its own embedding instead of
+  the one MiniLM/BGE comparison this project is actually about.
+
+Verified via a full integration test against the real `chromadb==1.5.9` library (not a
+mock), then run for real on Ritik's machine against the actual corpus:
+
+    fixed_size__minilm:     851 chunks (432/851 = 50.76% truncated at 256 tokens)
+    recursive__minilm:      798 chunks (484/798 = 60.65% truncated at 256 tokens)
+    section_aware__minilm:  843 chunks (457/843 = 54.21% truncated at 256 tokens)
+    fixed_size__bge:        851 chunks (  7/851 =  0.82% truncated at 512 tokens)
+    recursive__bge:         798 chunks ( 10/798 =  1.25% truncated at 512 tokens)
+    section_aware__bge:     843 chunks ( 11/843 =  1.30% truncated at 512 tokens)
+    Total vectors indexed: 4984 (expected 4984)
+
+Cross-checked against embed.py's earlier aggregate run: 432+484+457=1373 and 7+10+11=28,
+matching the 1373/2492 (55.10%) and 28/2492 (1.12%) figures from the tokenization gate
+exactly — two different scripts, same per-chunk numbers.
+
+New finding: truncation isn't uniform across strategies for MiniLM (recursive 60.65% >
+section_aware 54.21% > fixed_size 50.76%) — flagged for Day 4's writeup, not chased now.
+See DECISIONS.md for the likely mechanism.
+
+Compute-cost data point (the gate below asks for this): MiniLM embedded all 2,492 chunks
+in ~104s total; BGE took ~880s (~14.7 min) — roughly 8.5x slower, on top of already
+truncating far less. Concrete numbers for the compute half of the MiniLM vs BGE argument.
+
+`EVIDENCERAG_STORE` was confirmed UNSET on Ritik's machine before this run (Day 0's setup
+step had been skipped) — fixed by setting it for the current session and via `setx` for
+future ones, before running store.py for real.
+
+**3. `retrievers.py` — written and integration-tested, not yet run for real.** One
+interface, three implementations:
 
     class Retriever:
         def retrieve(self, query: str, k: int) -> list[Hit]: ...
@@ -267,14 +358,60 @@ them is meaningless without calibration, and calibration needs held-out data bet
 spent on evaluation. RRF consumes only ordering. This is exactly the weakness in the
 old `RAG` project's union-and-truncate fusion — record that in DECISIONS.md.
 
+`BM25Retriever` is built straight from `data/processed/chunks_{strategy}.jsonl` (the
+same chunk set dense retrieval for that strategy uses), independent of any embedding
+model. `HybridRRFRetriever` only ever fuses a dense+BM25 pair over the SAME strategy —
+fusing across strategies would mean combining two different chunk_id spaces. Chroma's
+"distance" (cosine space) is reported by `DenseRetriever` as `1 - distance`, so a higher
+score always means "more relevant," consistent with BM25's own direction.
+
+Verified with a full integration test against the real `chromadb==1.5.9` and real
+`rank_bm25==0.2.2` (matching `requirements.lock.txt` exactly), a small synthetic corpus,
+and a fake embedder with hand-picked embeddings — every score independently
+hand-computable, not just plausible-looking: dense cosine similarity matched to 1e-3,
+RRF scores matched the `1/(k_rrf+rank)` formula to 1e-9. Found (not a bug) that classic
+BM25's IDF is exactly 0 when a term sits in precisely half the corpus — `rank_bm25`
+floors negative IDF but not exact zero; essentially never triggered on the real
+800-1000-chunk-per-strategy corpus. See DECISIONS.md for the full writeup. Not yet run
+against the real corpus — needs Ritik's machine for real MiniLM query embeddings:
+
+    python src/retrievers.py
+    # prints top-5 from all three retrievers for the five hand-written probe queries below
+
+GATE (MiniLM vs BGE tokenization) -- RESOLVED. Confirmed directly on Ritik's machine:
+`SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2").max_seq_length == 256`,
+`SentenceTransformer("BAAI/bge-base-en-v1.5").max_seq_length == 512`. The raw-tokenizer
+check (both report `model_max_length=512`, 1.12% over) was answering a question about
+the wrong object -- `AutoTokenizer`, not the `SentenceTransformer` wrapper `.encode()`
+actually calls. Given the already-measured token distribution (median 265 across 2,492
+chunks), 55.10% of MiniLM's chunks (1373/2492) sit at or past its real 256-token
+limit -- confirmed by the real run in Day 2 item 1 above, not just estimated from
+percentiles.
+
+This does NOT mean shrink chunk_size. Both models embed the identical chunk set; making
+chunks smaller to flatter MiniLM would erase the exact effect worth measuring -- that
+MiniLM's own ceiling, not the chunking strategy, is what limits it. chunk_size stays
+1000. Action item is the `token_count`/`truncated` metadata above, so this becomes a
+measured, citable fact in Day 4's results instead of an invisible side effect. See
+DECISIONS.md for the full writeup.
+
 Smoke test before any eval: five hand-written queries you know the answers to — one
 acronym-heavy ("SA-Co benchmark"), one purely semantic ("how is depth predicted from a
 single camera"), one numerical, one about a limitation, one cross-paper. Print top-5 for
 each retriever side by side and read them.
 
-GATE: six collections built, counts match JSONL line counts, all three retrievers give
-sensible top-5 on all five probes. Record cold-start build time per embedding model
-(needed for the compute half of the MiniLM vs BGE argument).
+GATE — PASSED, DAY 2 COMPLETE: six collections built (4984/4984 vectors, matches JSONL
+line counts exactly), cold-start build time recorded per embedding model (MiniLM ~104s,
+BGE ~880s, ~8.5x slower), all three retrievers run for real against the actual corpus.
+Two of five probes ("SA-Co benchmark", the depth-prediction query) came back clean and
+on-topic across dense/BM25/hybrid. The other three were badly worded BY ME (bare "the
+model"/"the approach" phrasing with 6 papers in the corpus to choose from) rather than a
+retrieval defect — fixed in `retrievers.py` to name a specific paper each. RRF math
+hand-verified correct on the real run (see DECISIONS.md). One concrete finding carried
+into Day 3: the top hit for the cross-paper probe was a bibliography citation line, not
+body prose — worth checking whether the reranker demotes reference-list chunks.
+Retrieval-quality judgment (not just mechanics) deliberately NOT made from these 5
+anecdotal queries — that's what the eval set (Day 3-4) is for.
 
 ---
 
@@ -350,8 +487,16 @@ method questions because the corpus shares vocabulary across all six papers, so 
 matching retrieved the wrong paper's Method section" is more impressive than any
 improvement you could manufacture, and it's unfakeable.
 
-GATE: every stage's table in `reports/`. A short note per stage: which config won, by how
-much, one sentence on why. Failure cases from the worst stage in
+**Stage F (added after Day 1) — is 1000 chars actually a good chunk size?** Ritik asked
+why chunk_size is 1000 and not some other number -- it wasn't experimentally chosen, it
+was a reasonable-sounding default (see DECISIONS.md). Rather than sweep size across all
+3 strategies x 2 embeddings (that grid explosion is exactly what NOT to do), run ONLY the
+winning strategy from Stage A at 2-3 more sizes (e.g. 600, 1000, 1500) against the same
+locked benchmark. Cheap -- 2-3 more retrieval runs, no new eval questions -- and it turns
+an arbitrary parameter into either "we checked, 1000 was fine" or a genuine improvement.
+
+GATE: every stage's table in `reports/`, including Stage F. A short note per stage: which
+config won, by how much, one sentence on why. Failure cases from the worst stage in
 `reports/failure_analysis.md`.
 
 ---

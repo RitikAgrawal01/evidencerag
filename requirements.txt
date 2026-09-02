@@ -11,3 +11,4 @@ numpy
 python-dotenv
 tqdm
 tabulate
+transformers>=4.45

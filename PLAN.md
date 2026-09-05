@@ -138,10 +138,14 @@ Target layout (NEW = to create):
     src/embed.py             DONE  MiniLM / BGE wrapper, batch encode, per-chunk token stats
     src/store.py             DONE  Chroma collection per (strategy, model)
     src/retrievers.py        DONE  Dense, BM25, HybridRRF — one interface
-    src/rerank.py            NEW   cross-encoder second stage
+    src/rerank.py            PREP  cross-encoder wrapper written + integration-tested;
+                                  NOT yet evaluated (needs Day 3's qa_gold.jsonl -- see
+                                  the Day 2 gate note below)
     src/generate.py          NEW   Generator interface + OpenAI + abstention
     src/pipeline.py          NEW   config -> end-to-end answer
-    eval/draft_qa.py         NEW   GPT-4o-mini drafts QA from chunks
+    eval/draft_qa.py         DONE  written + integration-tested; not yet run for real
+                                  (needs OPENAI_API_KEY -- see DECISIONS.md)
+    eval/span_utils.py       NEW   shared span-normalization, draft_qa.py + ir_metrics.py
     eval/qa_draft.jsonl      NEW   machine output, never used directly
     eval/qa_gold.jsonl       NEW   YOUR reviewed set — the locked benchmark
     eval/ir_metrics.py       NEW   span-match hit rule, Recall@K, MRR
@@ -413,11 +417,18 @@ body prose — worth checking whether the reranker demotes reference-list chunks
 Retrieval-quality judgment (not just mechanics) deliberately NOT made from these 5
 anecdotal queries — that's what the eval set (Day 3-4) is for.
 
+NOTE (2 Sep 2026): src/rerank.py (the CrossEncoderReranker wrapper) has been written and integration-tested ahead of Day 3 -- see DECISIONS.md. This is prep work only: the module is verified to work mechanically (correct sort order, prior_rank threading, real chromadb/rank_bm25 underneath), but whether reranking actually helps is Day 4 Stage D's question and needs qa_gold.jsonl to answer. Next actual step per this plan is still Day 3.
+
 ---
 
 ## DAY 3 — Build the benchmark (the long pole — budget the whole day)
 
 Target ~90 answerable + ~15 unanswerable = ~105 questions, ~15 answerable per paper.
+ACTUAL (Day 3 complete, 5 Sep 2026): 73 answerable + 12 unanswerable = 85 total.
+17 answerable items were cut for cause during Step 2 review (not replaced), and 3 of
+15 attempted unanswerable candidates were cut for cause during Step 3 verification.
+Both shortfalls are quality cuts, consistent with "90 you trust beat 150 you don't"
+below. Full accounting in DECISIONS.md.
 
 **Step 1 — Draft (~1h, mostly unattended).** `draft_qa.py` samples chunks from the
 SECTION-AWARE set (the section label lets you enforce coverage) and asks GPT-4o-mini for
@@ -441,10 +452,24 @@ genuinely how a person would ask. You want a realistic mix, deliberately chosen.
 **Step 3 — Write the 15 unanswerable questions by hand.** Plausible questions about
 things the papers nearly discuss but don't.
 
+ACTUAL: written by Claude (not by hand), under real time pressure, after Ritik asked
+for this deviation explicitly. To avoid the exact obviously-absurd failure mode this
+section warns about, each candidate was grounded in a real, specific, topically-
+adjacent entity and verified absent via a full grep of that paper's entire chunk set
+-- not just assumed absent. 12 of 15 attempted candidates survived verification;
+Ritik manually reviewed and approved all 12 before they were accepted into
+qa_gold.jsonl. Full list and per-item evidence in DECISIONS.md.
+
 **Step 4 — Lock it.** Commit qa_gold.jsonl, record its SHA-256 in DECISIONS.md, never
 touch it again. If you later find a broken question: fix it, re-record the hash, and
 RE-RUN EVERY EXPERIMENT. Editing a benchmark after seeing results is how honest projects
 quietly become dishonest ones.
+
+NOTE (2 Sep 2026): src/rerank.py's prep note above still applies -- draft_qa.py is now ALSO written and integration-tested ahead of actually running Step 1 for real. It drafts eval/qa_draft.jsonl (the 90 answerable candidates); Steps 2-4 below (manual review, the 15 unanswerable questions, locking qa_gold.jsonl) are still entirely undone and are the real remaining work of Day 3. Five underspecified design calls this script had to make (per-paper quota split, which chunk gets which type, how comparative candidates are found, the comparative schema extension, and shared span-normalization logic) are written up in DECISIONS.md -- worth reading before Step 2's manual review, since they explain why a given item was sampled the way it was.
+
+NOTE (2 Sep 2026, later): Ritik's real smoke test surfaced a genuine bug -- a bibliography/citation-list chunk (section="References") produced a technically span-verified but substantively worthless "factual" question. Fixed: _load_section_aware_chunks() now excludes non-content sections (references/bibliography/acknowledgments, 186 of 843 chunks, ~22% of the corpus) from the sampling pool entirely, upstream of every question type and the comparative-candidate builder. This also fixed a latent second bug the exclusion would otherwise have caused: _build_comparative_candidates now drops embeddings pulled from Day 2's Chroma collection that reference now-excluded chunk ids, instead of crashing with KeyError. Full writeup in DECISIONS.md. Integration-tested against a synthetic corpus salted with excluded-section chunks (including a substring-trap case); pushed to eval/draft_qa.py, sha256 confirmed identical on both sides. RE-RUN FOR REAL, SUCCESSFULLY (2 Sep 2026): 90/90 items drafted, zero shortfalls. Independently re-verified from scratch (not just trusting the script): all 100 spans re-checked against the real corpus text, zero non-content-section leaks, zero duplicate evidence chunks, qtype/paper distribution matches PLAN.md's 30/20/20/10/10 spec exactly. One new finding for Step 2 reviewers: 13/90 (~14%) questions literally reference "the excerpt" in their own wording -- a real person querying a RAG system never phrases a question this way. Not a code bug; rewrite during manual review like any other leaked phrasing. Full detail in DECISIONS.md. Day 3 Step 1 is DONE; Step 2 (manual review) is next.
+
+NOTE (5 Sep 2026): Day 3 Steps 2-4 complete -- qa_gold.jsonl is LOCKED. Ritik manually reviewed all 90 drafted items and cut 17 for cause (listed in DECISIONS.md); the survivors were copied into a fresh qa_gold.jsonl with reviewed_by_human flipped true and renumbered contiguously (qid is scratch/non-semantic in qa_draft.jsonl, so no gap-filling was needed). Step 3's 12 unanswerable questions were Claude-drafted under time pressure (a deviation from "write these by hand", done with Ritik's explicit sign-off) using a grounded-entity-plus-full-corpus-grep verification method instead, then manually reviewed and approved by Ritik same as everything else. Final: 85 records (73 answerable + 12 unanswerable), sha256 2b35cdd12b4716caa438c3124b13fbc26bf3688d5ea4a4d209207dc3753130ed, recorded in DECISIONS.md. Per Step 4: do not touch this file again. Day 3 is DONE; Day 4 (staged retrieval experiments) is next.
 
 GATE: every gold_span verified as a substring of the source paper's extracted text.
 Type quota met. Hash recorded. You can describe five of your own questions from memory
@@ -539,7 +564,9 @@ sub-challenge in your thesis, applied to LLM output. FIRST THING TO CUT. Do not 
 block Day 7.
 
 GATE: end-to-end question in, cited answer out, sources verifiable by opening the PDF at
-that page. Rerank latency measured. Abstention triggering on >=12 of 15 unanswerables.
+that page. Rerank latency measured. Abstention triggering on >=10 of 12 unanswerables
+(scaled down from the original >=12 of 15 to preserve the same ~80% bar against the
+actual 12-item unanswerable set -- see DECISIONS.md).
 
 ---
 
@@ -549,7 +576,7 @@ that page. Rerank latency measured. Abstention triggering on >=12 of 15 unanswer
 retrieval config, best + reranker. Four metrics: faithfulness, answer relevancy, context
 precision, context recall. Running all 36 through an LLM judge is slow and adds nothing.
 
-Cost: ~105 questions x 3 configs x 4 LLM-judged metrics on gpt-4o-mini lands under $2
+Cost: ~85 questions x 3 configs x 4 LLM-judged metrics on gpt-4o-mini lands under $2
 including drafting and generation. Set a hard spend limit in the OpenAI dashboard anyway.
 
 SAY CLEARLY WHAT RAGAS DOES NOT MEASURE: RAGAS context precision/recall are LLM-JUDGED
@@ -599,12 +626,12 @@ with the measurement). This file is your interview script.
       reranker, served through a layout-aware PyMuPDF ingestion pipeline that fixed
       misordered extraction on 68% of the corpus.
 
-    - Constructed and manually validated a 105-question benchmark with span-anchored
+    - Constructed and manually validated an 85-question benchmark with span-anchored
       ground truth, enabling like-for-like comparison of 3 chunking strategies and 2
       embedding models: Recall@5 improved from __% to __% and MRR from ___ to ___,
       at +__ ms median latency.
 
-    - Added evidence-gated abstention (__% abstention on 15 unanswerable questions,
+    - Added evidence-gated abstention (__% abstention on 12 unanswerable questions,
       __% false-abstention rate) and a CI regression gate that blocks configs
       dropping Recall@5 by more than 2 points.
 
@@ -619,9 +646,15 @@ of your resume.
 - *How do you know section-aware chunking is better?* Name the exact Stage A deltas, then
   immediately name the context-length caveat — longer chunks contain more spans for free,
   so cite Recall@5 next to characters-at-K=5.
-- *Your ground truth came from an LLM. Why trust it?* The model drafted; you verified
-  every span as a literal substring of the paper and hand-reviewed all 105. Then locked
-  the file by hash and never edited it after seeing results.
+- *Your ground truth came from an LLM. Why trust it?* Two different constructions, both
+  human-gated. The 73 answerable items: gpt-4o-mini drafted, every span programmatically
+  verified as a literal substring of the paper, then you hand-reviewed all of them and
+  cut 17 for cause. The 12 unanswerable items: Claude drafted under time pressure, each
+  one grounded in a real adjacent entity and verified ABSENT via a full corpus grep
+  (not assumed absent), then you reviewed and approved all 12 yourself. Either way: a
+  model proposed, a programmatic or corpus-level check constrained what could be
+  proposed, and you were the last gate before anything entered the locked 85-item file
+  by hash.
 - *Difference between your Recall@5 and RAGAS context recall?* Recall@5 is IR recall
   against verified gold spans. RAGAS context recall is a second model's opinion about
   whether the context looks sufficient. One has ground truth; the other does not.

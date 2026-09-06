@@ -1,0 +1,14 @@
+{
+  "strategy": "section_aware",
+  "model_slug": "bge",
+  "retriever_type": "hybrid",
+  "rerank": true,
+  "candidate_k": 20,
+  "max_k": 5,
+  "corpus_content_hash": "eadd4ffc9fc1cd185e5720d68d40ced22ccc90fb71b8f95eef8db1ca58d417a4",
+  "benchmark_hash": "2b35cdd12b4716caa438c3124b13fbc26bf3688d5ea4a4d209207dc3753130ed",
+  "recall_at_5": 0.8767123287671232,
+  "faithfulness": 0.9805555555555555,
+  "reason": "Day 6 initial baseline",
+  "updated_at": "2026-09-06T18:54:55.914966+00:00"
+}

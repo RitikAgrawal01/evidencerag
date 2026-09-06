@@ -1,0 +1,21 @@
+{
+  "run_id": "fixed_size__minilm__dense__generation",
+  "strategy": "fixed_size",
+  "model_slug": "minilm",
+  "retriever_type": "dense",
+  "rerank": false,
+  "candidate_k": 20,
+  "max_k": 5,
+  "corpus_content_hash": "bba8614627e987117ba8ea04c603b11f6eed373496776dab91e5c91a8b1a07c9",
+  "benchmark_hash": "2b35cdd12b4716caa438c3124b13fbc26bf3688d5ea4a4d209207dc3753130ed",
+  "n_questions_total": 85,
+  "generated_at": "2026-09-06T10:49:48.394607+00:00",
+  "diagnostics": {
+    "n_questions_total": 85,
+    "n_model_abstained": 30,
+    "n_non_abstained_answers": 55,
+    "n_non_abstained_with_no_citations": 0,
+    "n_non_abstained_with_invalid_citation": 0,
+    "median_latency_ms": 1723.0500999139622
+  }
+}

@@ -1,13 +1,31 @@
 """
 eval/run_generation.py
 ------------------------
-Day 5: runs the winning Day 4 config (section_aware, chunk_size=1000, BGE,
-hybrid, rerank ON -- top-20 hybrid candidates reranked down to 5, per
-PLAN.md's own "top-20 hybrid candidates, keep 5") through generation, over
-ALL 85 qa_gold.jsonl records this time -- not just the 73 answerable ones
-run_retrieval.py evaluated. Day 5 specifically needs the 12 unanswerable
-questions too: they're the true-abstention half of the gate ("Abstention
-triggering on >=10 of 12 unanswerables").
+Day 5 built this against ONE config -- section_aware/BGE/hybrid/rerank,
+Day 4's overall winner. Day 6 needs generation (and, for RAGAS, the raw
+retrieved context text) over TWO MORE configs for comparison: the naive
+baseline (fixed_size chunking, MiniLM, dense-only, no rerank) and the best
+retrieval config WITHOUT the reranker (section_aware/BGE/hybrid, rerank
+OFF) -- see PLAN.md Day 6: "RAGAS on three configs only: naive baseline,
+best retrieval config, best + reranker." So strategy/model_slug/
+retriever_type/rerank are now CLI-selectable (mirroring run_retrieval.py's
+own --strategy/--model/--retriever/--rerank exactly, including its
+make_run_id naming convention) instead of hardcoded module constants.
+Calling this with no flags at all reproduces Day 5's EXACT original
+invocation and run_id (`section_aware__bge__hybrid_rerank__generation`) --
+that run is already complete and independently verified (see DECISIONS.md,
+"Day 5 results"); nothing here should ever cause it to be silently
+recomputed or overwritten by a default-flags run.
+
+CONTEXTS.JSONL, new this Day: Day 5's results.csv recorded citation
+metadata (cited_numbers, invalid_citations) but never the raw retrieved
+context TEXT itself -- there was no need to, since Day 5's own gate never
+looks at raw context. RAGAS's faithfulness/context-precision/context-recall
+metrics need exactly that (the actual passages the model was shown), so
+this file now also writes `contexts.jsonl` (one line per qid: chunk_ids,
+page ranges, and raw text of every context block shown to the generator)
+alongside results.csv. This is purely ADDITIVE -- results.csv's schema,
+and every row Day 5 already wrote, are unchanged.
 
 DEPENDENCY STRUCTURE, same philosophy as run_retrieval.py: everything
 above main() -- context-block construction, per-question evaluation,
@@ -54,19 +72,48 @@ RESULTS_DIR = EVAL_DIR / "results"
 # heavier than stdlib themselves (OpenAIGenerator's `import openai` is
 # lazy, inside its own __init__), so importing them at module level here
 # costs nothing and keeps this file's own top-level logic testable exactly
-# like run_retrieval.py's.
+# like run_retrieval.py's. (A real cross-directory import bug was caught
+# here on Day 5 by testing against the actual device repo layout, not
+# just a flat local test dir -- see DECISIONS.md.)
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from generate import ContextBlock, build_prompt  # noqa: E402,F401  (build_prompt re-exported for callers/tests)
 from span_utils import span_in_text  # noqa: E402
 
-# Day 5's fixed, already-justified config (Day 4's overall winner) --
-# this file does not re-run the chunking/embedding/retriever/rerank
-# comparison, only generation and abstention on top of it.
+# Day 5's fixed, already-justified DEFAULT config (Day 4's overall winner).
+# Kept as the argparse defaults below so a no-flags invocation reproduces
+# Day 5's exact original run untouched -- these are no longer read directly
+# by run_config(), which now takes strategy/model_slug/retriever_type/
+# rerank as explicit parameters (see run_retrieval.py's identical pattern).
 STRATEGY = "section_aware"
 MODEL_SLUG = "bge"
+RETRIEVER_TYPE = "hybrid"
+RERANK = True
 CANDIDATE_K = 20   # first-stage hybrid candidates handed to the reranker
 MAX_K = 5          # context blocks kept after reranking -- PLAN.md Day 5: "keep 5"
+
+# Mirrors run_retrieval.py's own lists exactly -- redefined locally rather
+# than imported cross-file, keeping eval/'s scripts independent of each
+# other (each already only shares ir_metrics/span_utils/generate).
+STRATEGIES = ["fixed_size", "recursive", "section_aware", "section_aware_600", "section_aware_1500"]
+MODEL_SLUGS = ["minilm", "bge"]
+RETRIEVER_TYPES = ["dense", "hybrid"]  # bm25 excluded: Day 6's 3 configs are both embedding-backed
+
+
+class NoOpReranker:
+    """Stands in for CrossEncoderReranker when a config's rerank stage is
+    OFF (Day 6's "best retrieval config, no reranker" -- PLAN.md Day 6).
+    Exposes the identical `.rerank(query, candidates, k)` interface
+    build_context_blocks/run_config already call, so run_config never
+    needs an `if rerank:` branch of its own -- candidates are already
+    Hit objects (chunk_id/text/metadata/score/rank), which is exactly the
+    shape build_context_blocks expects, so truncating to k is the entire
+    job. Mirrors run_retrieval.py's own `reranker=None` handling, but as
+    a real object rather than a null check, so run_config's call site
+    stays uniform regardless of which config is running."""
+
+    def rerank(self, query: str, candidates: list, k: int = 5) -> list:
+        return candidates[:k]
 
 
 def _sha256_file(path: Path) -> str:
@@ -94,14 +141,22 @@ def _hit_paper(chunk_id: str) -> str:
     return chunk_id.split("::")[0] if "::" in chunk_id else chunk_id
 
 
+def make_run_id(strategy: str, model_slug: str, retriever_type: str, rerank: bool) -> str:
+    """Identical convention to run_retrieval.py's make_run_id, with a
+    `__generation` suffix -- calling this with strategy=section_aware,
+    model_slug=bge, retriever_type=hybrid, rerank=True reproduces Day 5's
+    exact original run_id byte-for-byte."""
+    suffix = "_rerank" if rerank else ""
+    return f"{strategy}__{model_slug}__{retriever_type}{suffix}__generation"
+
+
 def build_context_blocks(reranked_hits: list) -> list:
-    """reranked_hits: rerank.py's RerankedHit objects (or any object
-    exposing the same chunk_id/text/metadata/score/rank attributes --
-    a test double with those four fields exercises the identical code
-    path, matching run_retrieval.py's evaluate_question philosophy).
-    Numbers context blocks by each hit's OWN post-rerank rank (1-indexed,
-    already produced by CrossEncoderReranker.rerank) -- not by re-deriving
-    an order here."""
+    """reranked_hits: rerank.py's RerankedHit objects, a plain retrievers.Hit
+    (when rerank is off -- NoOpReranker passes Hit objects through
+    unchanged, and Hit already carries the same chunk_id/text/metadata/
+    score/rank fields ContextBlock needs), or any test double exposing
+    those four fields. Numbers context blocks by each hit's OWN rank
+    (1-indexed) -- not by re-deriving an order here."""
     blocks = []
     for h in reranked_hits:
         meta = h.metadata
@@ -115,6 +170,22 @@ def build_context_blocks(reranked_hits: list) -> list:
             rerank_score=h.score,
         ))
     return blocks
+
+
+def build_context_record(qid: str, context_blocks: list) -> dict:
+    """The new, Day-6-motivated companion to evaluate_question: everything
+    RAGAS needs about what the generator actually SAW for this question,
+    which results.csv deliberately never stored (Day 5 only needed
+    citation metadata, not raw text). One dict per question; run_config
+    collects these into contexts.jsonl, keyed by qid so run_ragas.py can
+    join it back against results.csv without re-deriving anything."""
+    return {
+        "qid": qid,
+        "context_chunk_ids": [b.chunk_id for b in context_blocks],
+        "context_pages": [[b.start_page, b.end_page] for b in context_blocks],
+        "context_scores": [b.rerank_score for b in context_blocks],
+        "context_texts": [b.text for b in context_blocks],
+    }
 
 
 def evaluate_question(rec: dict, answer, context_blocks: list) -> dict:
@@ -237,7 +308,7 @@ def aggregate_diagnostics(rows: list) -> dict:
     }
 
 
-def write_run(run_id: str, rows: list, tau_sweep_rows: list, config: dict) -> tuple:
+def write_run(run_id: str, rows: list, tau_sweep_rows: list, config: dict, context_rows: list) -> tuple:
     out_dir = RESULTS_DIR / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -265,49 +336,69 @@ def write_run(run_id: str, rows: list, tau_sweep_rows: list, config: dict) -> tu
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
-    return csv_path, tau_path, config_path
+    contexts_path = out_dir / "contexts.jsonl"
+    with open(contexts_path, "w", encoding="utf-8") as f:
+        for row in context_rows:
+            f.write(json.dumps(row) + "\n")
+
+    return csv_path, tau_path, config_path, contexts_path
 
 
-def run_config(retriever, reranker, generator, candidate_k: int = CANDIDATE_K, max_k: int = MAX_K) -> dict:
+def run_config(
+    retriever, reranker, generator,
+    strategy: str = STRATEGY, model_slug: str = MODEL_SLUG,
+    retriever_type: str = RETRIEVER_TYPE, rerank: bool = RERANK,
+    candidate_k: int = CANDIDATE_K, max_k: int = MAX_K,
+) -> dict:
     """Pure orchestration over an already-constructed retriever, reranker,
     and generator -- identical philosophy to run_retrieval.py's
     run_config: this function does not care whether `generator` is an
-    OpenAIGenerator or a test double, only that it exposes .generate()."""
+    OpenAIGenerator or a test double, only that it exposes .generate(),
+    and does not care whether `reranker` is a real CrossEncoderReranker or
+    a NoOpReranker, only that it exposes .rerank(). strategy/model_slug/
+    retriever_type/rerank are recorded metadata (run_id, config.json,
+    which corpus file to hash) -- they do not themselves select retriever
+    behavior; the caller already built the right retriever/reranker for
+    them (main() does this from the CLI flags, exactly like
+    run_retrieval.py's own main())."""
     all_gold = load_gold_records()
 
     rows = []
+    context_rows = []
     for rec in all_gold:
         candidates = retriever.retrieve(rec["question"], k=candidate_k)
         reranked = reranker.rerank(rec["question"], candidates, k=max_k)
         context_blocks = build_context_blocks(reranked)
         answer = generator.generate(rec["question"], context_blocks)
         rows.append(evaluate_question(rec, answer, context_blocks))
+        context_rows.append(build_context_record(rec["qid"], context_blocks))
 
     tau_grid = build_tau_grid(rows)
     tau_sweep_rows = sweep_tau(rows, tau_grid)
     diagnostics = aggregate_diagnostics(rows)
 
-    run_id = f"{STRATEGY}__{MODEL_SLUG}__hybrid_rerank__generation"
+    run_id = make_run_id(strategy, model_slug, retriever_type, rerank)
     config = {
         "run_id": run_id,
-        "strategy": STRATEGY,
-        "model_slug": MODEL_SLUG,
-        "retriever_type": "hybrid",
-        "rerank": True,
+        "strategy": strategy,
+        "model_slug": model_slug,
+        "retriever_type": retriever_type,
+        "rerank": rerank,
         "candidate_k": candidate_k,
         "max_k": max_k,
-        "corpus_content_hash": _sha256_file(PROCESSED_DIR / f"chunks_{STRATEGY}.jsonl"),
+        "corpus_content_hash": _sha256_file(PROCESSED_DIR / f"chunks_{strategy}.jsonl"),
         "benchmark_hash": _sha256_file(GOLD_PATH),
         "n_questions_total": len(all_gold),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "diagnostics": diagnostics,
     }
 
-    csv_path, tau_path, config_path = write_run(run_id, rows, tau_sweep_rows, config)
+    csv_path, tau_path, config_path, contexts_path = write_run(run_id, rows, tau_sweep_rows, config, context_rows)
     return {
         "run_id": run_id, "rows": rows, "tau_sweep": tau_sweep_rows,
         "diagnostics": diagnostics, "config": config,
         "csv_path": csv_path, "tau_path": tau_path, "config_path": config_path,
+        "contexts_path": contexts_path,
     }
 
 
@@ -330,18 +421,27 @@ def print_summary(result: dict) -> None:
     print(f"\nWrote {result['csv_path']}")
     print(f"Wrote {result['tau_path']}")
     print(f"Wrote {result['config_path']}")
+    print(f"Wrote {result['contexts_path']}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Day 5: grounded generation + abstention over qa_gold.jsonl's 85 questions, "
-                    "using Day 4's winning retrieval config."
+        description="Grounded generation + abstention over qa_gold.jsonl's 85 questions, "
+                    "for one (strategy, model, retriever, rerank) config. Defaults reproduce "
+                    "Day 5's original winning-config run exactly."
     )
+    parser.add_argument("--strategy", default=STRATEGY, choices=STRATEGIES)
+    parser.add_argument("--model-slug", default=MODEL_SLUG, choices=MODEL_SLUGS,
+                        help="Embedding model slug for retrieval (NOT the generation model -- see --model).")
+    parser.add_argument("--retriever", default=RETRIEVER_TYPE, choices=RETRIEVER_TYPES)
+    parser.add_argument("--no-rerank", action="store_true",
+                        help="Skip the cross-encoder second stage (Day 6's 'best retrieval config, no reranker').")
     parser.add_argument("--candidate-k", type=int, default=CANDIDATE_K)
     parser.add_argument("--max-k", type=int, default=MAX_K)
-    parser.add_argument("--model", default="gpt-5.6-terra", help="OpenAI chat model id.")
+    parser.add_argument("--model", default="gpt-5.6-terra", help="OpenAI chat model id (the GENERATOR, not the retriever).")
     parser.add_argument("--chroma-path", default=None, help="Override EVIDENCERAG_STORE / the repo-local fallback.")
     args = parser.parse_args()
+    rerank = not args.no_rerank
 
     # Heavy, environment-specific imports deferred to here on purpose --
     # see the module docstring. Only actually generating for real needs
@@ -360,11 +460,17 @@ def main():
         or str(REPO_ROOT / "data" / "chroma")
     )
     client = chromadb.PersistentClient(path=chroma_path)
-    _, _, hybrid = build_retrievers(client, STRATEGY, MODEL_SLUG)
-    reranker = CrossEncoderReranker()
+    dense, _, hybrid = build_retrievers(client, args.strategy, args.model_slug)
+    retriever = {"dense": dense, "hybrid": hybrid}[args.retriever]
+    reranker = CrossEncoderReranker() if rerank else NoOpReranker()
     generator = OpenAIGenerator(model_id=args.model)
 
-    result = run_config(hybrid, reranker, generator, candidate_k=args.candidate_k, max_k=args.max_k)
+    result = run_config(
+        retriever, reranker, generator,
+        strategy=args.strategy, model_slug=args.model_slug,
+        retriever_type=args.retriever, rerank=rerank,
+        candidate_k=args.candidate_k, max_k=args.max_k,
+    )
     print_summary(result)
 
 

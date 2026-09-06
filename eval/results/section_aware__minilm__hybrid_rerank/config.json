@@ -1,0 +1,27 @@
+{
+  "run_id": "section_aware__minilm__hybrid_rerank",
+  "strategy": "section_aware",
+  "model_slug": "minilm",
+  "retriever_type": "hybrid",
+  "rerank": true,
+  "candidate_k": 20,
+  "max_k": 10,
+  "corpus_content_hash": "eadd4ffc9fc1cd185e5720d68d40ced22ccc90fb71b8f95eef8db1ca58d417a4",
+  "benchmark_hash": "2b35cdd12b4716caa438c3124b13fbc26bf3688d5ea4a4d209207dc3753130ed",
+  "n_questions_in_gold_total": 85,
+  "n_questions_answerable_evaluated": 73,
+  "generated_at": "2026-09-06T06:31:06.135925+00:00",
+  "metrics": {
+    "recall_at_1": 0.7671232876712328,
+    "recall_at_3": 0.821917808219178,
+    "recall_at_5": 0.821917808219178,
+    "recall_at_10": 0.8767123287671232,
+    "mrr_at_10": 0.8028919330289193,
+    "mean_context_chars_at_5": 5013.780821917808,
+    "n_questions": 73,
+    "n_hits_at_10": 64,
+    "n_page_overlap_misses": 5,
+    "median_latency_ms": 1260.4434000095353,
+    "p95_latency_ms": 1800.7672999519855
+  }
+}

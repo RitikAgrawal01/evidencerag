@@ -1,0 +1,27 @@
+{
+  "run_id": "section_aware_1500__bge__hybrid_rerank",
+  "strategy": "section_aware_1500",
+  "model_slug": "bge",
+  "retriever_type": "hybrid",
+  "rerank": true,
+  "candidate_k": 20,
+  "max_k": 10,
+  "corpus_content_hash": "5830dcc50f588477af2dc00bb3fd8d0b194c204acd2eb665b744bfe0f546c6c0",
+  "benchmark_hash": "2b35cdd12b4716caa438c3124b13fbc26bf3688d5ea4a4d209207dc3753130ed",
+  "n_questions_in_gold_total": 85,
+  "n_questions_answerable_evaluated": 73,
+  "generated_at": "2026-09-06T07:14:56.681401+00:00",
+  "metrics": {
+    "recall_at_1": 0.6575342465753424,
+    "recall_at_3": 0.7671232876712328,
+    "recall_at_5": 0.7945205479452054,
+    "recall_at_10": 0.863013698630137,
+    "mrr_at_10": 0.7172918025657754,
+    "mean_context_chars_at_5": 7244.027397260274,
+    "n_questions": 73,
+    "n_hits_at_10": 63,
+    "n_page_overlap_misses": 4,
+    "median_latency_ms": 1130.7365999091417,
+    "p95_latency_ms": 1240.699200076051
+  }
+}

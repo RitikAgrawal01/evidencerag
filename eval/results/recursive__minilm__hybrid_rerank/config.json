@@ -1,0 +1,27 @@
+{
+  "run_id": "recursive__minilm__hybrid_rerank",
+  "strategy": "recursive",
+  "model_slug": "minilm",
+  "retriever_type": "hybrid",
+  "rerank": true,
+  "candidate_k": 20,
+  "max_k": 10,
+  "corpus_content_hash": "2515296df146bc23ef1bcb00bf8f9b42119799f81a1e2480567ccd6506dedc40",
+  "benchmark_hash": "2b35cdd12b4716caa438c3124b13fbc26bf3688d5ea4a4d209207dc3753130ed",
+  "n_questions_in_gold_total": 85,
+  "n_questions_answerable_evaluated": 73,
+  "generated_at": "2026-09-06T06:25:55.700680+00:00",
+  "metrics": {
+    "recall_at_1": 0.6986301369863014,
+    "recall_at_3": 0.821917808219178,
+    "recall_at_5": 0.8493150684931506,
+    "recall_at_10": 0.8767123287671232,
+    "mrr_at_10": 0.7611111111111113,
+    "mean_context_chars_at_5": 5274.3835616438355,
+    "n_questions": 73,
+    "n_hits_at_10": 64,
+    "n_page_overlap_misses": 2,
+    "median_latency_ms": 1242.5377999898046,
+    "p95_latency_ms": 1786.8791000219062
+  }
+}

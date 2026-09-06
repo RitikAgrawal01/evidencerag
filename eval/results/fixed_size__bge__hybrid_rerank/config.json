@@ -1,0 +1,27 @@
+{
+  "run_id": "fixed_size__bge__hybrid_rerank",
+  "strategy": "fixed_size",
+  "model_slug": "bge",
+  "retriever_type": "hybrid",
+  "rerank": true,
+  "candidate_k": 20,
+  "max_k": 10,
+  "corpus_content_hash": "bba8614627e987117ba8ea04c603b11f6eed373496776dab91e5c91a8b1a07c9",
+  "benchmark_hash": "2b35cdd12b4716caa438c3124b13fbc26bf3688d5ea4a4d209207dc3753130ed",
+  "n_questions_in_gold_total": 85,
+  "n_questions_answerable_evaluated": 73,
+  "generated_at": "2026-09-06T06:22:41.109843+00:00",
+  "metrics": {
+    "recall_at_1": 0.589041095890411,
+    "recall_at_3": 0.726027397260274,
+    "recall_at_5": 0.7534246575342466,
+    "recall_at_10": 0.7808219178082192,
+    "mrr_at_10": 0.6636986301369864,
+    "mean_context_chars_at_5": 4988.178082191781,
+    "n_questions": 73,
+    "n_hits_at_10": 57,
+    "n_page_overlap_misses": 10,
+    "median_latency_ms": 1215.1809999486431,
+    "p95_latency_ms": 1737.6664000330493
+  }
+}
